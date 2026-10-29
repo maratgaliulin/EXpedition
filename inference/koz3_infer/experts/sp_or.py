@@ -91,7 +91,7 @@ def _scene_gate(region, path):
 _GATE = {}
 
 
-def predict(region, paths, deadline):
+def _predict_pooled(region, paths, deadline):
     import time
     from koz3 import prev_sp_io, prev_sp_det
     from koz3.sp_fuse import fuse
@@ -165,4 +165,25 @@ def predict(region, paths, deadline):
                 ft["properties"]["image"] = f"spobj{n}"     # one fused object (already merged across scenes): the hedge
                 feats.append(ft)                            # pair must survive region dedupe
     log(f"sp_or {region.name}: {len(paths)} scene(s) → {len(Fz)} fused objects")
+    return feats
+
+
+def predict(region, paths, deadline):
+    """Run every source image as an independent reference layer.
+
+    The organisers clarified that two views of the same physical object are two
+    reference objects.  Model/member fusion remains within one image; detections
+    are never fused across source images.
+    """
+    if len(paths) <= 1:
+        return _predict_pooled(region, paths, deadline)
+    feats = []
+    for path in paths:
+        one = _predict_pooled(region, [path], deadline)
+        for ft in one:
+            # Source image is part of the target identity.  Keep the existing
+            # per-object image id so within-image duplicate removal is unchanged;
+            # dedupe_region uses source_layer to isolate independent images.
+            ft["properties"]["source_layer"] = path.name
+        feats.extend(one)
     return feats

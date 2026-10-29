@@ -1,0 +1,88 @@
+{
+  "geo": {
+    "f_thr": 0.15,
+    "r_find": 0.5,
+    "o_thr": 0.3,
+    "o_min_m2": 0.5,
+    "input": "rgb",
+    "finds_source": "gbm"
+  },
+  "li": {
+    "thr": 0.15,
+    "dual": 0.05,
+    "comp_thr": 0.5,
+    "fort_min_px": 30,
+    "gor_min_px": 600,
+    "r_out": 1.0,
+    "weights": {
+      "li_0.ts": 0.5,
+      "li_1.ts": 0.5,
+      "li_2.ts": 1.0,
+      "li_x_0.ts": 1.0
+    },
+    "tta": "d8",
+    "nbr_prior": {
+      "R": 200,
+      "K": 3,
+      "snb": 0.2
+    }
+  },
+  "sp_or": {
+    "thr": 0.15,
+    "dual": 0.4,
+    "r_out": 1.0,
+    "fused_thr": 0.25,
+    "match_m": 8.0,
+    "gate_thr": 0.1,
+    "fused_thr_cls": {
+      "arkhitektury": 0.15
+    },
+    "frame_prior": {
+      "x": 0.5,
+      "t2": 0.35
+    },
+    "kurgan_hedge": 0.4,
+    "gor_snap": {
+      "rho": 0.2,
+      "s_min": 0.02
+    }
+  },
+  "ae": {
+    "det_thr": 0.7,
+    "classes": [],
+    "n_models": 2,
+    "r_out": 1.0,
+    "class_thr": {
+      "fortifikatsii": 0.4
+    },
+    "max_s": 180
+  },
+  "or": {
+    "det_thr": 0.5,
+    "classes": [],
+    "n_models": 2,
+    "r_out": 1.0,
+    "class_thr": {
+      "arkhitektury": 0.45
+    },
+    "max_s": 420
+  },
+  "dedupe": {
+    "enabled": true,
+    "dist_m": 3.0,
+    "skip_markups": [
+      "li"
+    ],
+    "skip_classes": [
+      "finds_points"
+    ]
+  },
+  "fuse": {
+    "enabled": true,
+    "beta": 0.0,
+    "alpha": {
+      "li->sp_or": 0.1
+    }
+  },
+  "experts_off": []
+}

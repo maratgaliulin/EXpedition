@@ -22,6 +22,13 @@ from koz3.sp_train import CLS, load_chips, prep_dir, ROOT  # noqa: E402
 CROP = 768
 # mixed precision for training: "fp16" (default), "bf16" or "fp32" (env DET_AMP)
 AMP_DTYPE = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp32": None}[os.environ.get("DET_AMP", "fp16")]
+# D-FINE denoising queries make local training collapse: the classifier is learned on the GT-derived denoising
+# queries, so eval-mode max class score stays ~0.15 and F1 is 0.000 (docs/EXPERIMENTS.md, "Why HF D-FINE did not
+# train here"). 0 is the recipe every local satellite member was trained with, and the exported config mirrors it
+# (scripts/build_submission.py sets cfg.num_denoising = 0). Keep it at 0 unless re-running that comparison.
+NUM_DN = int(os.environ.get("DET_NUM_DN", "0"))
+if os.environ.get("NO_TF32") == "1":     # TF32 (Ada default for cuDNN convs) distorts D-FINE gradients by ~22 %
+    torch.backends.cudnn.allow_tf32 = False; torch.backends.cuda.matmul.allow_tf32 = False
 
 
 class Sampler:
@@ -109,7 +116,8 @@ def remap_state(sd, model_keys):
 def make_model(ckpt):
     from transformers import AutoModelForObjectDetection
     return AutoModelForObjectDetection.from_pretrained(ckpt, num_labels=len(CLS), id2label=dict(enumerate(CLS)),
-                                                       label2id={c: i for i, c in enumerate(CLS)}, ignore_mismatched_sizes=True)
+                                                       label2id={c: i for i, c in enumerate(CLS)},
+                                                       num_denoising=NUM_DN, ignore_mismatched_sizes=True)
 
 
 def train(mod, fold, ckpt, tag, iters=10000, bs=4, lr=2e-4, seed=0, init=None, probe_every=0):
@@ -119,7 +127,10 @@ def train(mod, fold, ckpt, tag, iters=10000, bs=4, lr=2e-4, seed=0, init=None, p
     model = make_model(ckpt)
     if init:   # start from an existing fine-tuned checkpoint (e.g. the previous team's fold model)
         sd = remap_state(torch.load(init, map_location="cpu"), set(model.state_dict()))
-        model.load_state_dict({k: v.float() for k, v in sd.items()})
+        # non-strict: a checkpoint trained WITH denoising queries carries layers this model does not have (and vice
+        # versa); everything else must line up, so report what was skipped instead of failing the whole run
+        miss, unexp = model.load_state_dict({k: v.float() for k, v in sd.items()}, strict=False)
+        print(f"init {init}: {len(miss)} missing, {len(unexp)} unexpected tensors (denoising layers expected)", flush=True)
     model = model.cuda().train()
     probe = [c for c in load_chips(mod) if c["fold"] == fold and len(c["objs"]) >= 3][:8] if probe_every else []
     bb = [p for n, p in model.named_parameters() if "backbone" in n]
@@ -230,9 +241,10 @@ def oof(mod, ckpt, tag):
             t = Affine(*c["transform"]); tr = Transformer.from_crs(c["crs"], 3857, always_xy=True)
             for cl, cx, cy, bw, bh, s in detect_chip(model, rgb):
                 X, Y = tr.transform(*(t * (cx, cy)))
-                rows.append((c["region"], CLS[cl], s, X, Y, bw, bh))
+                rows.append((c["region"], CLS[cl], s, X, Y, bw, bh, c["scene"]))
         print("oof fold", fold, len(rows), flush=True)
-    df = pd.DataFrame(rows, columns=["region", "cls", "score", "x", "y", "w_px", "h_px"])
+    # source_layer = the source image: the OOF harness fuses within an image, exactly like the deployed expert
+    df = pd.DataFrame(rows, columns=["region", "cls", "score", "x", "y", "w_px", "h_px", "source_layer"])
     df.to_parquet(os.path.join(ROOT, "work", mod.lower(), f"oof_det_{tag}_cands.parquet"))
 
 

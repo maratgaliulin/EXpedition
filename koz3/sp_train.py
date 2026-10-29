@@ -193,7 +193,7 @@ def norm_img(rgb):
     return (x - MEAN) / STD * v, v > 0
 
 
-def decode_chip(prob, valid, transform, crs, region, markup, thr=0.1, dual=0.35, r_out=0.5, nms=9):
+def decode_chip(prob, valid, transform, crs, region, markup, thr=0.1, dual=0.35, r_out=0.5, nms=9, scene=None):
     from pyproj import Transformer
     from rasterio.transform import Affine
     from shapely.geometry import Point
@@ -215,19 +215,27 @@ def decode_chip(prob, valid, transform, crs, region, markup, thr=0.1, dual=0.35,
         mx, my = tr.transform(X, Y)
         k = 1 / np.cos(np.radians(np.degrees(2 * np.arctan(np.exp(my / 6378137.0)) - np.pi / 2)))
         for c, pc in emit:
+            props = {"class_name": CLS[c], "confidence": float(s * pc), "region_name": region, "markup_type": markup}
+            if scene is not None:      # every source image is an independent reference layer (deployment rule)
+                props["source_layer"] = scene
             feats.append({"type": "Feature", "geometry": Point(mx, my).buffer(r_out * k, 12).__geo_interface__,
-                          "properties": {"class_name": CLS[c], "confidence": float(s * pc), "region_name": region,
-                                         "markup_type": markup}})
+                          "properties": props})
     return feats
 
 
 def dedupe(feats, dist_m=3.0):
-    """Overlapping tiles produce the same peak twice: keep the most confident per class within dist_m."""
+    """Overlapping tiles produce the same peak twice: keep the most confident per class within dist_m.
+
+    Duplicates are removed only within one source image; coincident objects from different scenes stay separate,
+    matching what the deployed expert does (and what the organisers require)."""
     from shapely.geometry import shape
     from shapely.strtree import STRtree
     out = []
-    for cls in {f["properties"]["class_name"] for f in feats}:
-        fs = sorted([f for f in feats if f["properties"]["class_name"] == cls], key=lambda f: -f["properties"]["confidence"])
+    keys = {(f["properties"]["class_name"], f["properties"].get("source_layer")) for f in feats}
+    for cls, layer in keys:
+        fs = sorted([f for f in feats if f["properties"]["class_name"] == cls
+                     and f["properties"].get("source_layer") == layer],
+                    key=lambda f: -f["properties"]["confidence"])
         pts = [shape(f["geometry"]).centroid for f in fs]
         if not pts:
             continue
@@ -276,12 +284,16 @@ def sweep(mod, chips, probs, thrs=(0.05, 0.1, 0.15, 0.2, 0.3), duals=(0.3, 0.4, 
             fs = []
             for c in use:
                 p, v = probs[c["file"]]
-                fs += decode_chip(p.astype(np.float32), v, c["transform"], c["crs"], c["region"], mod.lower(), t, dual)
+                fs += decode_chip(p.astype(np.float32), v, c["transform"], c["crs"], c["region"], mod.lower(), t, dual,
+                                  scene=c["scene"])
             cache[(t, dual)] = dedupe(fs)
         return cache[(t, dual)]
     base = feats_for(min(thrs), 0.3)
-    pd.DataFrame([{"region": f["properties"]["region_name"], "cls": f["properties"]["class_name"], "score": f["properties"]["confidence"],
-                   "x": shape(f["geometry"]).centroid.x, "y": shape(f["geometry"]).centroid.y} for f in base]).to_parquet(
+    # source_layer keeps the candidate's source image: the OOF harness fuses within an image, like the expert does
+    pd.DataFrame([{"region": f["properties"]["region_name"], "cls": f["properties"]["class_name"],
+                   "score": f["properties"]["confidence"],
+                   "x": shape(f["geometry"]).centroid.x, "y": shape(f["geometry"]).centroid.y,
+                   "source_layer": f["properties"].get("source_layer")} for f in base]).to_parquet(
         os.path.join(ROOT, "work", mod.lower(), f"oof_hm{tag}_cands.parquet"))
     make = lambda s, f: {"type": "FeatureCollection", "features": [x for x in feats_for(*s) if fold_of[x["properties"]["region_name"]] == f]}
     C = fold_counts(make, [(t, d) for t in thrs for d in duals], folds, gt_by_fold, CLS)

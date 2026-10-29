@@ -82,7 +82,9 @@ def predict_tiled(model, img, n_out, tile=1024, overlap=192, tta=True, dev="cuda
     C, H, W = img.shape
     out = np.zeros((n_out, H, W), np.float32); cnt = np.zeros((H, W), np.float32)
     step = tile - overlap
-    ramp = np.minimum(np.arange(tile) + 1, overlap) / overlap
+    # overlap=0 (single pass over a chip) would divide by zero here: keep a 1-px ramp so the blend weights stay finite
+    ov = max(overlap, 1)
+    ramp = np.minimum(np.arange(tile) + 1, ov) / ov
     for y in list(range(0, max(1, H - overlap), step)):
         for x in list(range(0, max(1, W - overlap), step)):
             y1, x1 = min(H, y + tile), min(W, x + tile)

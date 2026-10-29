@@ -80,16 +80,19 @@ def predict_ae_det(region, paths, deadline, c, name="ae_det", res=0.5, markup="a
         log(f"{markup} {p.name}: {len(chips)} tiles → {len(rows) - n0} detections {time.time() - t0:.0f}s")
     if not rows:
         return []
-    D = pd.DataFrame(rows, columns=["region", "cls", "score", "x", "y", "image"])
-    F = fuse([D[["region", "cls", "score", "x", "y"]]], np.ones(1), match_m=4.0)
-    img = D.set_index(["x", "y"]).image.to_dict()
     feats = []
-    for r in F.itertuples():
-        kk = 1 / np.cos(np.radians(np.degrees(2 * np.arctan(np.exp(r.y / 6378137.0)) - np.pi / 2)))
-        ft = to_feature(circle(r.x, r.y, c["r_out"] * kk, 12), r.cls, r.score, region.name, markup)
-        if ft:
-            ft["properties"]["image"] = img.get((r.x, r.y), "")
-            feats.append(ft)
+    D = pd.DataFrame(rows, columns=["region", "cls", "score", "x", "y", "image"])
+    # Every aerial/orthophoto source image is an independent reference layer.
+    # Fuse overlapping tiles within a source image, never between images.
+    for image, Di in D.groupby("image", sort=False):
+        F = fuse([Di[["region", "cls", "score", "x", "y"]]], np.ones(1), match_m=4.0)
+        for r in F.itertuples():
+            kk = 1 / np.cos(np.radians(np.degrees(2 * np.arctan(np.exp(r.y / 6378137.0)) - np.pi / 2)))
+            ft = to_feature(circle(r.x, r.y, c["r_out"] * kk, 12), r.cls, r.score, region.name, markup)
+            if ft:
+                ft["properties"]["image"] = image
+                ft["properties"]["source_layer"] = image
+                feats.append(ft)
     return feats
 
 
@@ -125,6 +128,7 @@ def predict(region, paths, deadline, cfg_key="ae", markup="ae"):
             ft = to_feature(circle(x, y, c["r_out"] * kk, 12), cls, s, region.name, markup)
             if ft:
                 ft["properties"]["image"] = p.name
+                ft["properties"]["source_layer"] = p.name
                 feats.append(ft); n += 1
         log(f"{markup} {p.name}: {arr.shape[1]}x{arr.shape[2]} px @0.5 m, {len(dets)} detections → {n} kept {time.time() - t0:.0f}s")
     return feats

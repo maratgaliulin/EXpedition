@@ -1,0 +1,56 @@
+myenv/bin/python scripts/sp_oof_local.py --alone
+config.py недоступен (No module named 'config') — используются встроенные дефолты метрики; для расчёта ровно как на платформе положите config.py рядом со скриптом
+132 regions, 4 folds, members ['det_dfl2', 'hmbq2', 'hmbq']
+  GT per fold: 0:367, 1:367, 2:366, 3:506
+
+member alone (threshold sweep only):
+  det_dfl2       honest 0.1969  oracle 0.2270 @ thr=0.5
+  hmbq2          honest 0.0899  oracle 0.0899 @ thr=0.2
+  hmbq           honest 0.0813  oracle 0.0813 @ thr=0.2
+fusion: 212616 member candidates → 145878 fused objects
+
+nested honest 0.2469   oracle 0.2469 @ thr=0.2,hedge=0.4
+chosen per fold: 0:thr=0.2,hedge=0.4, 1:thr=0.2,hedge=0.4, 2:thr=0.2,hedge=0.4, 3:thr=0.2,hedge=0.4
+   honest per class:
+     kurgany_povrezhdennye    F1 0.381  tp  317  fp  521  fn  770
+     kurgany_tselye           F1 0.207  tp   28  fp   71  fn  179
+     gorodishcha              F1 0.108  tp    8  fp  150  fn   57
+     arkhitektury             F1 0.256  tp   37  fp   84  fn  173
+     fortifikatsii            F1 0.000  tp    0  fp    2  fn   37
+
+largest kurgan emitters (points, honest setting): 163_Курганы_34:106, 183_Сарское:95, 057_Кабардино_Балкария:56, 158_Курганы_29:48, 145_Курганы_16:39, 047_Тыва_2:33, 055_Курменту:30, 146_Курганы_17:27
+per-site counts → /home/sakhgu/Документы/python_projects/EXpedition/scripts/../work/spor/oof_local_sites.csv
+sakhgu@sakhgu-MS-7E39:~/Документы/python_projects/EXpedition$ myenv/bin/python scripts/sp_oof_local.py
+config.py недоступен (No module named 'config') — используются встроенные дефолты метрики; для расчёта ровно как на платформе положите config.py рядом со скриптом
+132 regions, 4 folds, members ['det_dfl2', 'hmbq2', 'hmbq']
+  GT per fold: 0:367, 1:367, 2:366, 3:506
+fusion: 212616 member candidates → 145878 fused objects
+
+nested honest 0.2469   oracle 0.2469 @ thr=0.2,hedge=0.4
+chosen per fold: 0:thr=0.2,hedge=0.4, 1:thr=0.2,hedge=0.4, 2:thr=0.2,hedge=0.4, 3:thr=0.2,hedge=0.4
+   honest per class:
+     kurgany_povrezhdennye    F1 0.381  tp  317  fp  521  fn  770
+     kurgany_tselye           F1 0.207  tp   28  fp   71  fn  179
+     gorodishcha              F1 0.108  tp    8  fp  150  fn   57
+     arkhitektury             F1 0.256  tp   37  fp   84  fn  173
+     fortifikatsii            F1 0.000  tp    0  fp    2  fn   37
+
+largest kurgan emitters (points, honest setting): 163_Курганы_34:106, 183_Сарское:95, 057_Кабардино_Балкария:56, 158_Курганы_29:48, 145_Курганы_16:39, 047_Тыва_2:33, 055_Курменту:30, 146_Курганы_17:27
+per-site counts → /home/sakhgu/Документы/python_projects/EXpedition/scripts/../work/spor/oof_local_sites.csv
+sakhgu@sakhgu-MS-7E39:~/Документы/python_projects/EXpedition$ myenv/bin/python scripts/sp_oof_local.py --accept "thr=0.25,hedge=0.4" "thr=0.25,hedge=0.4"
+config.py недоступен (No module named 'config') — используются встроенные дефолты метрики; для расчёта ровно как на платформе положите config.py рядом со скриптом
+132 regions, 4 folds, members ['det_dfl2', 'hmbq2', 'hmbq']
+  GT per fold: 0:367, 1:367, 2:366, 3:506
+fusion: 212616 member candidates → 145878 fused objects
+acceptance settings: thr=0.25,hedge=0.4 | thr=0.25,hedge=0.4
+
+nested honest 0.2379   oracle 0.2379 @ thr=0.25,hedge=0.4
+chosen per fold: 0:thr=0.25,hedge=0.4, 1:thr=0.25,hedge=0.4, 2:thr=0.25,hedge=0.4, 3:thr=0.25,hedge=0.4
+   honest per class:
+     kurgany_povrezhdennye    F1 0.361  tp  272  fp  292  fn  815
+     kurgany_tselye           F1 0.191  tp   25  fp   59  fn  182
+     gorodishcha              F1 0.120  tp    6  fp   58  fn   59
+     arkhitektury             F1 0.256  tp   37  fp   84  fn  173
+     fortifikatsii            F1 0.000  tp    0  fp    1  fn   37
+[thr=0.25,hedge=0.4 vs thr=0.25,hedge=0.4] 103 sites  gain +0.0000  k*=0  sites up/down/same 0/0/103  bootstrap P(gain>0)=0.00  90% CI [+0.0000, +0.0000]
+   removal path: 031_Новотитаровская:+0.0000, 034_Усть_река:+0.0000, 035_Шумгора:+0.0000, 040_Примаки_1.3км:+0.0000, 041_Миловидово:+0.0000, 042_Тору_Айгыр:+0.0000, 046_Тыва_1:+0.0000
