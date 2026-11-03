@@ -49,7 +49,8 @@ def build_cache():
         if os.path.exists(out):
             continue
         d, v, (x0, ytop, res), crs = dtm_mod.load(f)
-        x, vv = relief.channels(d, v, res)
+        # tiled: the 12-channel (RELIEF_EXTRA) build allocates ~10 GB on a multi-km sheet in one shot and OOMs
+        x, vv = relief.channels_tiled(d, v, res)
         np.save(out, x.astype(np.float16))
         np.save(os.path.join(CACHE, region + "_valid.npy"), vv)
         json.dump({"x0": x0, "ytop": ytop, "res": relief.NET_RES, "crs": crs}, open(os.path.join(CACHE, region + ".json"), "w"))

@@ -57,7 +57,11 @@ def predict(region, paths, deadline):
         tta = c.get("tta", True)        # "d8": 4 rotations × 2 flips (nested OOF 0.5651 → 0.5695); True: 3 flips
         if tta == "d8" and time.time() > deadline - 300:
             tta = True                     # protect the time budget
-        ps = [oom_retry(lambda t, m=m, xx=xs[k]: hm.predict_tiled(m, xx, N_HM + N_MK, tile=t, overlap=min(192, t // 4), tta=tta))
+        scales = c.get("scale_tta")     # [[scale, weight], ...] pyramid TTA (held-out fold 0: 0.4719 → 0.5046);
+        if scales and time.time() > deadline - 300 * max(1, len(scales) - 1):
+            scales = None                   # drop the extra scales rather than overrun the 30-minute budget
+        ps = [oom_retry(lambda t, m=m, xx=xs[k]: hm.predict_tiled(m, xx, N_HM + N_MK, tile=t, overlap=min(192, t // 4),
+                                                                  tta=tta, scales=scales))
               for m, k, _ in models]
         ws = np.array([w for _, _, w in models], np.float32)
         prob = np.tensordot(ws / ws.sum(), np.stack(ps), axes=1)

@@ -69,11 +69,14 @@ def _scene_gate(region, path):
     from ..models import load_ts, ts_files
     ws = ts_files("sp_scene")
     if not ws:
+        log(f"sp_or gate {path.name}: no sp_scene weights -> gate off")
         return None
     if "sp_scene" not in _GATE:
         _GATE["sp_scene"] = [load_ts(w) for w in ws]
     with rasterio.open(str(path)) as src:
         if not sp_io.is_small(src):
+            log(f"sp_or gate {path.name}: BIG scene {src.width}x{src.height} "
+                f"({src.width * src.height / 1e6:.1f} Mpx > {sp_io.SMALL_PX / 1e6:g} Mpx) -> no gate, no snap")
             return None
         crs = src.crs.to_string() if (src.crs is not None and src.crs.to_epsg()) else utm_crs(region)
         rgb, _, t = sp_io.read_small(src)
@@ -84,8 +87,13 @@ def _scene_gate(region, path):
     x = torch.from_numpy(((pad.astype(np.float32).transpose(2, 0, 1) - MEAN) / STD).astype(np.float32))[None].cuda()
     with torch.no_grad():
         p = float(np.mean([torch.sigmoid(m(x.flip(fl) if fl else x)).item() for m in _GATE["sp_scene"] for fl in ((), (-1,), (-2,))]))
-    X, Y = Transformer.from_crs(crs, 3857, always_xy=True).transform(*(t * (w / 2, h / 2)))
-    return p, X, Y
+    tr = Transformer.from_crs(crs, 3857, always_xy=True)
+    X, Y = tr.transform(*(t * (w / 2, h / 2)))
+    (x0, y0), (x1, y1) = tr.transform(*(t * (0, 0))), tr.transform(*(t * (w, h)))
+    # centre + half-extent: gor_snap searches for a fused hillfort candidate within rho * half of the centre
+    half = max(abs(x1 - x0), abs(y1 - y0)) / 2
+    log(f"sp_or gate {path.name}: small scene {w}x{h}, p={p:.3f}, half-extent {half:.0f} m")
+    return p, X, Y, half
 
 
 _GATE = {}
@@ -136,6 +144,10 @@ def _predict_pooled(region, paths, deadline):
     if not members:
         return feats
     Fz = fuse(members, np.ones(len(members)), match_m=c.get("match_m", 8.0))
+    K2 = ("kurgany_povrezhdennye", "kurgany_tselye")
+    # pre-threshold hillfort candidates: gor_snap may place the gate's point AT one of these instead of the centre
+    Fall = Fz[Fz.cls == "gorodishcha"]
+    log(f"sp_or {region.name}: fused {len(Fz)} objects pre-threshold, gorodishcha candidates {len(Fall)}")
     thr_cls = c.get("fused_thr_cls", {})            # per-class fused thresholds (nested: architecture 0.15 in every fold)
     Fz = Fz[Fz.score >= Fz.cls.map(lambda k: thr_cls.get(k, c["fused_thr"]))]
     fr = c.get("frame_prior")                       # big scenes are framed on the site: far detections need a higher score
@@ -144,14 +156,44 @@ def _predict_pooled(region, paths, deadline):
         d = np.hypot(Fz.x.values[:, None] - g[:, 0], Fz.y.values[:, None] - g[:, 1]) / np.maximum(g[:, 2], 1)
         j = d.argmin(1); far = (~sm[j]) & (d[np.arange(len(Fz)), j] > fr["x"])
         Fz = Fz[~far | (Fz.score.values >= fr["t2"])]
+    rg = c.get("kurgan_region_gate")                # a region whose best kurgan is weak emits no kurgans at all
+    if rg is not None and len(Fz):
+        kp_ = Fz[Fz.cls.isin(K2)]
+        best = kp_.groupby("region").score.max() if len(kp_) else pd.Series(dtype=float)
+        dead = set(best[best < rg].index) if len(best) else set()
+        if dead:
+            n0 = len(Fz)
+            Fz = Fz[~((Fz.region.isin(dead)) & Fz.cls.isin(K2))]
+            log(f"sp_or {region.name}: kurgan region gate < {rg} dropped {n0 - len(Fz)} kurgans")
     if gates:                       # scripts/sp_scene_gate_oof.py "swap": confident scene → centre hillfort (conf = p);
         g = c["gate_thr"]           # any small scene below the gate → drop the detectors' hillforts in this region
-        add = [(region.name, "gorodishcha", p_, X, Y) for p_, X, Y in gates if p_ >= g]
-        if any(p_ < g for p_, _, _ in gates):
+        snap = c.get("gor_snap")    # optional: place that point on the best fused hillfort candidate near the centre
+        add = []
+        n_pass = n_moved = 0
+        for p_, X, Y, half in gates:
+            if p_ < g:
+                continue
+            n_pass += 1
+            sx, sy = X, Y
+            if snap and len(Fall):
+                rad = snap["rho"] * max(half, 1.0)
+                near = Fall[np.hypot(Fall.x.values - X, Fall.y.values - Y) <= rad]
+                near = near[near.score >= snap["s_min"]]
+                if len(near):
+                    b = near.loc[near.score.idxmax()]
+                    sx, sy = float(b.x), float(b.y)
+                    n_moved += 1
+                    log(f"sp_or {region.name}: SNAP {np.hypot(sx - X, sy - Y):.1f} m, r={rad:.0f} m, {len(near)} cand")
+                else:
+                    log(f"sp_or {region.name}: no candidate within r={rad:.0f} m of a gate point "
+                        f"({len(Fall)} gorodishcha candidates pooled)")
+            add.append((region.name, "gorodishcha", p_, sx, sy))
+        log(f"sp_or {region.name}: gates={len(gates)} (p>=thr {n_pass}), snapped={n_moved}, "
+            f"gorodishcha dropped={'yes' if any(q[0] < g for q in gates) else 'no'}")
+        if any(q[0] < g for q in gates):
             Fz = Fz[Fz.cls != "gorodishcha"]
         Fz = pd.concat([Fz, pd.DataFrame(add, columns=["region", "cls", "score", "x", "y"])], ignore_index=True)
     hedge = c.get("kurgan_hedge")                   # members disagree on damaged / intact → emit the other class too
-    K2 = ("kurgany_povrezhdennye", "kurgany_tselye")
     for n, r in enumerate(Fz.itertuples()):
         k = 1 / np.cos(np.radians(np.degrees(2 * np.arctan(np.exp(r.y / 6378137.0)) - np.pi / 2)))
         emit = [(r.cls, r.score)]

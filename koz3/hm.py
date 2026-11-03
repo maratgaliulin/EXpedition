@@ -77,8 +77,35 @@ def decode(hm, valid=None, thr=0.05, nms=9):
 
 
 @torch.no_grad()
-def predict_tiled(model, img, n_out, tile=1024, overlap=192, tta=True, dev="cuda"):
-    """img (C,H,W) float32 numpy → (n_out,H,W) sigmoid maps, tiled with flip TTA and linear blending."""
+def predict_tiled(model, img, n_out, tile=1024, overlap=192, tta=True, dev="cuda", scales=None):
+    """img (C,H,W) float32 numpy → (n_out,H,W) sigmoid maps, tiled with flip TTA and linear blending.
+
+    scales: [(s, weight), ...] scale-pyramid TTA. Training stretches the ground by 0.7–1.45 (LI_AUG), so averaging the
+    network's answers on resampled terrain is a free vote: held-out LiDAR fold 0, 0.4719 → 0.5046 pooled at the
+    deployed decode, +0.027…+0.045 at every threshold in {0.1, 0.15, 0.2, 0.3}, 13/20 sites better.
+    None or a single 1.0 = the previous behaviour exactly.
+    """
+    if scales and (len(scales) > 1 or scales[0][0] != 1.0):
+        H, W = img.shape[1], img.shape[2]
+        acc, wsum = 0.0, 0.0
+        for s, w in scales:
+            if s == 1.0:
+                p = _predict_one(model, img, n_out, tile, overlap, tta, dev)
+            else:
+                small = F.interpolate(torch.from_numpy(np.ascontiguousarray(img))[None],
+                                      size=(int(round(H * s)), int(round(W * s))),
+                                      mode="bilinear", align_corners=False)[0].numpy()
+                p = _predict_one(model, small, n_out, tile, overlap, tta, dev)
+                p = F.interpolate(torch.from_numpy(p)[None], size=(H, W),
+                                  mode="bilinear", align_corners=False)[0].numpy()
+            acc = acc + w * p
+            wsum += w
+        return acc / wsum
+    return _predict_one(model, img, n_out, tile, overlap, tta, dev)
+
+
+@torch.no_grad()
+def _predict_one(model, img, n_out, tile, overlap, tta, dev):
     C, H, W = img.shape
     out = np.zeros((n_out, H, W), np.float32); cnt = np.zeros((H, W), np.float32)
     step = tile - overlap

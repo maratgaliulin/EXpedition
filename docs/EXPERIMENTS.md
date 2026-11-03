@@ -605,3 +605,34 @@ Ideas from ROGII (robust acceptance), DOE GEMS (incomplete labels, asymmetric me
   within R): high-precision subsets (FCOS t 0.4, R 60, m 30: share 0.48; t 0.3: 0.35) but tiny volume (28–55 of 974
   Ae kurgans) → best pooled +0.0018, honest −0.0062 (6/20 wins, unstable choices) → **rejected**. Lever for the future:
   a dense-object (point-heatmap / counting) film model without detection caps, trained on cemetery sheets.
+
+## 2 Nov 2026 — LiDAR scale-pyramid TTA (after the outage; local data rebuilt)
+
+Context: `data/las_prep` / `data/li_cache` were empty, so the 59 on-disk LAS were re-prepared with the new
+`scripts/las_prep_local.py` (the shipped `las_stream_prep.py` needs `docs/download_lists/4_lidar_LAS.urls.txt`, which is
+not in the repo) and `python -m koz3.li_train --cache` under `RELIEF_EXTRA=1`. `build_cache` used the untiled
+`relief.channels` and OOMed on 3–6 GB sheets → switched to `channels_tiled` (same output, bounded memory).
+
+Recipe: fold 0 of the site-disjoint split (`sp_prep.site_folds`, `kaggle_import` absent so the ledger's L2 folds are not
+available), `LI_AUG=1 LI_PASTE=1 RELIEF_EXTRA=1`, 12k it, 67 min. 20 held-out sites / 530 objects
+(131 kp, 171 kt, 10 gor, 218 fort) — a larger honest set than the 13-region public LiDAR sample.
+
+Decode-only lever, no retraining: average the sigmoid maps of the same model at several resamplings (scale pyramid),
+fixed deployed decode (`decode_site_v2`, thr 0.15, dual 0.05, neighbour prior), 3-flip TTA in every arm.
+
+| arm | thr 0.1 | thr 0.15 | thr 0.2 | thr 0.3 |
+|---|---:|---:|---:|---:|
+| base (1.0) | 0.4495 | 0.4719 | 0.4803 | 0.4890 |
+| pyramid 1.0 / 0.8 / 1.25 | **0.4767** | **0.5046** | **0.5253** | **0.5319** |
+| Δ | +0.0272 | +0.0326 | +0.0450 | +0.0428 |
+
+At thr 0.15: kp F1 0.411 → 0.447 (fp 341 → 294), kt 0.633 → 0.704 (tp 97 → 125), gor 0.522 → 0.558, fort 0.044 → 0.035.
+13/20 sites better; the two-scale variant (1.0/0.8) gives only +0.0147 → the wide scale matters.
+
+**Caveat (important).** The same probe with the SHIPPED weights on local sites goes the other way (011_Эрентуна 0.790 →
+0.510, 004_Боровичи_1 0.848 → 0.777, 189_Макеево 0.620 → 0.602, 104_Шетнево 0.800 → 0.789). Those sites are in the
+deployed members' training set, where the model has memorised their exact scale appearance and averaging with perturbed
+resamplings dilutes the memorised response — so that number is not evidence against the lever, but it does mean the
+deployed blend cannot be validated locally. Cost: 1.5–3× LiDAR inference (011: 12 → 15 s, 004: 12.6 → 35.8 s).
+Status: implementation shipped **config-gated and off** (`li.scale_tta`, `koz3.hm.predict_tiled(scales=...)`,
+`tests/test_predict_scales.py`); promote only after a full fold-OOF of the deployed blend or a platform A/B.
