@@ -117,3 +117,61 @@ LI_ENC=tu-swin_tiny LI_AUG=1 LI_PASTE=1 RELIEF_EXTRA=1 \
 3. In parallel: P2 member (one fold) and P1 config; P3 last (GPU-bound, EV lowest).
 4. Promote to a build only what passes k\* ≥ 5 / P ≥ 0.9, then rehearse with
    `scripts/rehearse.py` and patch the archive with `scripts/patch_archive.py` (never re-zip the tree).
+
+---
+
+## Status 2026-11-06 — checkpoint (git `94d2bee`)
+
+**Landed (committed):**
+`docs/PLAN_V22.md`, `configs/v22_candidate.json`, `scripts/ae_dense_hm.py` (counting loss, tight σ, hard sanity gate,
+continuous-rotation aug, `--report` per-sheet + density precision), `koz3/sp_train.py` (`SP_ROT`, `SP_SCALELO/HI`,
+defaults preserve the proven recipe bit-for-bit).
+
+**P0 measurement that changed the design.** The 5 Nov failure was attributed to "target too small → 1–2 positive px".
+That is only half of it. Scanning the loss-optimal amplitude α\* (p = α·t) on a lone Gaussian:
+
+| σ (px) | halo px | α\* | L(1.0) | L(α\*) |
+|---:|---:|---:|---:|---:|
+| 1.5 | 68 | 0.75 | 0.172 | 0.085 |
+| 2.0 | 112 | 0.70 | 0.307 | 0.128 |
+| 4.0 | 464 | 0.55 | 1.229 | 0.300 |
+| 6.0 | 1 040 | **0.45** | 2.765 | 0.457 |
+
+The focal objective's minimum is **never** at p = t, and widening the Gaussian (the previous "fix") moves the optimum
+*toward* a flat map — which is the observed outcome (max heat 0.057 after 12k iterations at σ = 6). The first
+`half < perfect` gate also mis-fired: it compared only the family {t, t/2, flat}, so it rejected σ = 2–4 as well.
+
+**Replacement:** `AE_LOSS=count` — weighted MSE on the Gaussian density map (MCNN / CSRNet family), the standard
+objective for dense counting. MSE is separable per pixel, so its optimum **is** p = t at every pixel regardless of
+weights; `AE_POS_W` (default 50) only keeps the "predict 0 everywhere" map expensive. Positive mass share on a real
+dense probe batch: **80.7 %**, L(target) 0.00000 vs L(flat 0.02) 0.123.
+
+**Smoke run** (`--fold 0 --iters 600 --tag _smoke2`, 54 s): sanity gate passes, `peak` 0.245 → 0.181 → 0.193 on the
+fixed dense probe. Not evidence of a working model (the broken 12k run ended at 0.057, so the floor is 3× higher, but
+600 iters is far too early) — the first real run is the decision point.
+
+**Open item for Monday, check this first.** Total loss is still dominated by the mask head: `hm.bce_dice` ≈ 1.0 while
+the counting term is ≈ 0.01–0.12. The heat head may therefore be under-trained. Try `loss = 10·count_loss + bce_dice`
+(or `count_loss + 0.1·bce_dice`) on a 1k-iteration A/B before spending 4 × 17 min on folds.
+
+**Not started:** no `_v22` fold training, no satellite `_eb3` member, no Swin LiDAR member, no rehearsal of the
+pyramid config. GPU idle, `work/ae/dense_smoke2_f0.pt` is a 600-iteration smoke artifact (not usable);
+the 5 Nov `work/ae/dense_*` checkpoints are the flat runs.
+
+**Monday, in order:**
+```bash
+# 1. loss-balance A/B (two 1k runs, ~2 min each), pick the better peak curve
+AE_LOSS=count ./myenv/bin/python scripts/ae_dense_hm.py --fold 0 --iters 1000 --tag _bal10
+#    (edit the heat term multiplier in scripts/ae_dense_hm.py between the two runs)
+
+# 2. four folds (~17 min each), tag _v22
+for f in 0 1 2 3; do ./myenv/bin/python scripts/ae_dense_hm.py --fold $f --tag _v22; done
+
+# 3. candidates + per-sheet / density precision table → decide the carpet gate
+./myenv/bin/python scripts/ae_dense_hm.py --oof --tag _v22 --report
+
+# 4. honest sweep on those candidates
+./myenv/bin/python scripts/ae_hm_prior_oof.py --sweep --tag _v22
+```
+
+Kill the lever if no fold reaches ≥ 0.20 held-out precision on the emitting subset after the density gate.
