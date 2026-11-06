@@ -1,49 +1,43 @@
-(myenv) sakhgu@sakhgu-MS-7E39:~/Документы/python_projects/EXpedition$ python -W ignore - <<'EOF' 2>&1 | grep -v "^config.py"
-import json, sys
-sys.path.insert(0, "scripts"); sys.path.insert(0, ".")
-from collections import defaultdict
-from koz3.score import score
-from koz3.nested import weighted, _add_all, _add
-from sp_oof_local import region_folds
+BASE=archive/koz3_submission_v20_layers_ae_fort_20261027
+OUT=build/rebuild1
+rm -rf "$OUT" && mkdir -p "$OUT"
 
-names = json.load(open("work/rehearsal_sp/names.json"))     # anon → real region
-RF = region_folds()                                         # real region → fold
-fold_of = {a: RF[r] for a, r in names.items() if r in RF}
+# 1. base = the runnable 0.50190 tree (weights + vendor + shipped koz3/koz3_infer code)
+rsync -a --exclude '__pycache__' "$BASE/" "$OUT/"
 
-gt = defaultdict(list)
-for f in json.load(open("work/rehearsal_sp/gt.geojson"))["features"]:
-    gt[f["properties"]["region_name"]].append(f)
+# 2. overlay ONLY the code you intend to ship (currently byte-identical to what shipped)
+cp inference/koz3_infer/experts/sp_or.py "$OUT/inference/koz3_infer/experts/sp_or.py"
 
-def counts(path):
-    d = json.load(open(path)); P = defaultdict(list)
-    for f in d["features"]:
-        P[f["properties"]["region_name"]].append(f)
-    out = {}
-    for reg, gts in gt.items():
-        _, res = score({"type": "FeatureCollection", "features": P.get(reg, [])},
-                       {"type": "FeatureCollection", "features": gts})
-        out[reg] = {c: (v["tp"], v["fp"], v["fn"]) for c, v in res.items()}
-    return out
-
-C = {k: counts(f"work/rehearsal_sp/result_{p}.geojson") for k, p in
-     (("base", "base"), ("rho0.2", "probe_0.2_0.02"), ("rho0.35", "probe_0.35_0.02"))}
-folds = sorted({fold_of[a] for a in C["base"] if a in fold_of})
-print("folds:", {f: sum(1 for a in C['base'] if fold_of.get(a) == f) for f in folds})
-
-for k in ("rho0.2", "rho0.35"):
-    print(f"  {k:7s} pooled {weighted(_add_all(C[k].values())):.4f}")
-
-picks, tot = {}, {}
-for f in folds:
-    pick = max(("rho0.2", "rho0.35"),
-               key=lambda k: weighted(_add_all(C[k][a] for a in C[k] if fold_of.get(a) != f)))
-    picks[f] = pick
-    tot = _add(tot, _add_all(C[pick][a] for a in C[pick] if fold_of.get(a) == f))
-print("chosen per fold:", picks)
-print(f"HONEST (nested) score {weighted(tot):.4f}")
+# 3. config: leave it exactly as shipped (no flags — a non-scoring build wastes a submission)
+./myenv/bin/python - <<'EOF'
+import json
+p = "build/rebuild1/inference/models/config.json"
+cfg = json.load(open(p))                       # keep shipped key order, do NOT sort_keys
+cfg.pop("diagnostic", None)                    # dead flag: main.py exits 3 and the platform returns nothing
+json.dump(cfg, open(p, "w"), indent=1)
 EOF
-folds: {0: 4, 1: 11, 2: 5, 3: 10}
-  rho0.2  pooled 0.5585
-  rho0.35 pooled 0.5679
-chosen per fold: {0: 'rho0.35', 1: 'rho0.2', 2: 'rho0.35', 3: 'rho0.35'}
-HONEST (nested) score 0.5585
+
+# 4. zip from the tree ROOT (no wrapper folder), files only
+./myenv/bin/python - <<'EOF'
+import os, zipfile
+root, zp = "build/rebuild1", "build/rebuild1.zip"
+with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
+    for dp, dns, fs in os.walk(root):
+        dns.sort()
+        for f in sorted(fs):
+            p = os.path.join(dp, f)
+            z.write(p, os.path.relpath(p, root))
+print(zp, round(os.path.getsize(zp) / 1e9, 3), "GB")
+EOF
+
+
+
+python scripts/build_submission.py \
+  --li work/li/li_x0_f*.pt work/li/li_f*.pt \
+  --sp_or work/spor/hmbq*_f*.pt \
+  --sp_dfine work/spor/det_dfl2_f*.pt \
+  --geo work/geo/geo_f*.pt \
+  --extra_geo work/geo/finds_gbm.json work/geo/objects.json \
+  --config configs/deployed_v20.json \
+  --image wooferclaw/archeology:latest \
+  --out build

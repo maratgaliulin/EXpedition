@@ -636,3 +636,47 @@ resamplings dilutes the memorised response — so that number is not evidence ag
 deployed blend cannot be validated locally. Cost: 1.5–3× LiDAR inference (011: 12 → 15 s, 004: 12.6 → 35.8 s).
 Status: implementation shipped **config-gated and off** (`li.scale_tta`, `koz3.hm.predict_tiled(scales=...)`,
 `tests/test_predict_scales.py`); promote only after a full fold-OOF of the deployed blend or a platform A/B.
+
+## 3 Nov 2026 — why the Ae heatmap fails (mechanism), and LiDAR folds 1–2
+
+Rebuilt `data/ae_prep` (`python -m koz3.sp_prep --mod Ae`: 36 sheets → 6 803 chips @0.5 m, 4 site folds of
+9/8/3/12 regions) and trained the same `koz3/sp_train --mod Ae` heatmap that the ledger rejects at 0.026.
+
+**Diagnosis (new).** The failure is in the training target/loss, not the representation: at 0.5 m a kurgan is a Gaussian
+of σ ≈ 2 px, so a 512 crop of a *field* sheet contains **1–2 positive pixels per batch**. `hm.focal_hm` divides by
+`(pos·w).sum()`, so the reported loss swings 0.68 ↔ 5.88 between consecutive checks (it 11500 = 5.88, it 11999 = 0.68) and
+the gradient is dominated by single pixels. Measured on the saved checkpoints: focal ≈ 5–7 on fresh training batches,
+max heat 0.02–0.08 — the model predicts *nothing*, and the only way this loss can be reduced is to raise probability
+everywhere, which is exactly the "fires everywhere on grey film" the ledger recorded. Two runs (lr 3e-4 @ bs 8-scale,
+lr 1.3e-4 @ bs 4) bracket the pathology: under-fire and over-fire.
+
+Consequence: the sheet-centre framing prior (labels sit at median d90/half-side < 0.6 on every sheet — measured over all
+36 Ae sheets, labels are never outside their sheet) cannot rescue a model that does not fire. The prior is still the
+right decode-side rule; it needs a model trained with a stable objective on **dense cemetery crops** (many objects per
+crop, e.g. Тимерево 498 labels in one chip), i.e. change the *sampler* and the *loss normalisation*, not the decoder.
+
+**LiDAR scale pyramid, folds 1–2** (same recipe/folds as fold 0):
+
+| fold | sites | base | pyramid 1.0/0.8/1.25 | Δ | better |
+|---|---:|---:|---:|---:|---:|
+| 0 | 20 | 0.4719 | 0.5046 | **+0.0327** | 13/20 |
+| 1 | 10 | 0.5495 | 0.5747 | **+0.0252** | 5/10 (2 ties) |
+| 2 | 20 | 0.5431 | 0.5405 | **−0.0026** | 2/20 |
+
+Fold 1 stays positive at every threshold (+0.015…+0.026). Fold 2 shows the failure mode: kp improves (0.518 → 0.535)
+but kt degrades (0.575 → 0.517, fp 65 → 113) — the wide scale adds intact-kurgan FPs on that fold. Verdict pending fold 3.
+
+### LiDAR scale pyramid — four-fold verdict (59 held-out sites, deployed decode)
+
+| arm | pooled | Δ vs base | sites better |
+|---|---:|---:|---:|
+| base 1.0 | 0.5730 | — | — |
+| **1.0 / 0.8 / 1.25** | **0.5889** | **+0.0160** | 25/59 |
+| 1.0 / 1.25 | 0.5677 | −0.0053 | 20/59 |
+| 1.0 / 0.8 | 0.5739 | +0.0010 | 17/59 |
+
+Per fold (base → pyramid): f0 0.4719 → 0.5046 (+0.033), f1 0.5488 → 0.5743 (+0.026), f2 0.5431 → 0.5404 (−0.003),
+f3 0.6480 → 0.6593 (+0.011). Positive in 3/4 folds, worst fold −0.003; fold 1 stays positive at every threshold
+(+0.015…+0.026). Neither single extra scale reproduces the gain — only the 3-point pyramid does, so part of the effect may
+be seed noise (one seed per fold, 12k iters). Expected platform effect ≈ +0.003…0.004 final via kp/kt, i.e. **not** enough
+to justify a submission slot on its own; keep it gated off and ship it alongside a bigger change.

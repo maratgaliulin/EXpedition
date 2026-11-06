@@ -37,10 +37,6 @@ def main(argv):
     if cfg().get("probe") == "lidar":      # exit-code probe: no result, the bitmask is the exit code
         from koz3_infer.probe import run as probe_run
         sys.exit(probe_run(in_dir))
-    diag = bool(cfg().get("diagnostic"))
-    if diag:
-        from koz3_infer import diag as D
-        D.environment(); D.inputs(in_dir)
     try:
         features = run(in_dir, t0)
     except Exception as e:  # never die without writing: a partial answer scores, nothing scores zero
@@ -50,10 +46,6 @@ def main(argv):
         from koz3_infer.run import COLLECTED
         features = list(COLLECTED)
     finally:
-        if diag:   # diagnostic build: report and fail on purpose (the platform returns logs only for failed runs)
-            D.summary(features)
-            log(f"DIAGNOSTIC RUN finished at {time.time() - t0:.1f} s; no result written on purpose")
-            sys.exit(3)
         write_result_atomic(features, out_path)
         log(f"wrote {len(features)} features to {out_path} at {time.time() - t0:.1f} s")
 

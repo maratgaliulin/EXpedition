@@ -1,6 +1,12 @@
 """Diagnostics printed to the run log (metadata only: environment, input file names / sizes / CRS / LAS headers,
-per-expert output counts). Used by the diagnostic build, which deliberately writes no result so the platform
-returns the full log."""
+per-expert output counts).
+
+UNUSED — do not wire this back into `main.py`. It used to be called by a "diagnostic build" that wrote no result
+and exited 3, on the assumption that the platform returns the run log of a failed run. It does not: a failed run
+yields one line, "Контейнер завершился (exit code=3), результат не получен", and nothing else (verified on
+2026-11-03 and 2026-11-05, two wasted submissions). The only signal the platform returns for a non-scoring run is
+the exit code, so remote diagnostics must use `koz3_infer/probe.py` (bitmask in the exit code).
+"""
 import json
 import os
 import sys

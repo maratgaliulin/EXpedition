@@ -26,6 +26,13 @@ HM_OF = {0: 0, 1: 0, 2: 1, 3: 2, 4: 3}
 N_HM, N_MK = 4, 5
 CROP = 512
 ENC = os.environ.get("SP_ENC", "tu-convnext_tiny")
+# Augmentation knobs (off by default: the deployed satellite members were trained with the constants below).
+# SP_ROT=1 adds a continuous rotation to every crop. Until now the sampler only produced the D4 group (4 x rot90 +
+# flip), which is 8 variants of the same pixels for overhead imagery that has no canonical orientation; a continuous
+# angle makes the effective training set unbounded. SP_SCALELO/HI widen the zoom jitter (default is the proven range).
+ROT = os.environ.get("SP_ROT") == "1"
+SCALE_LO = float(os.environ.get("SP_SCALELO", 0.7))
+SCALE_HI = float(os.environ.get("SP_SCALEHI", 1.4))
 MEAN = np.array([0.485, 0.456, 0.406], np.float32)[:, None, None] * 255
 STD = np.array([0.229, 0.224, 0.225], np.float32)[:, None, None] * 255
 ROOT = os.path.join(DATA, "..", "..")
@@ -100,22 +107,32 @@ class Sampler:
     def crop(self):
         c = self.chips[self.rng.choice(len(self.chips), p=self.p)]
         im = self._img(c["file"])
-        s = float(np.exp(self.rng.uniform(np.log(0.7), np.log(1.4))))
+        s = float(np.exp(self.rng.uniform(np.log(SCALE_LO), np.log(SCALE_HI))))
         h, w = im.shape[:2]
         if c["objs"] and self.rng.random() < 0.6:
             g = c["objs"][self.rng.integers(len(c["objs"]))][1].representative_point()
             cx, cy = g.x + self.rng.normal(0, 80), g.y + self.rng.normal(0, 80)
         else:
             cx, cy = self.rng.uniform(0, w), self.rng.uniform(0, h)
-        src = CROP / s
-        x0, y0 = cx - src / 2, cy - src / 2
-        x0 = float(np.clip(x0, min(0, w - src), max(0, w - src)))   # keep the crop inside the chip when it fits
-        y0 = float(np.clip(y0, min(0, h - src), max(0, h - src)))
-        M = np.array([[s, 0, -x0 * s], [0, s, -y0 * s]], np.float32)
+        if ROT:
+            # source → crop: q = s·R(θ)(p − c) + CROP/2; the frame may leave the chip (borderValue 0 + valid mask).
+            th = float(self.rng.uniform(-np.pi, np.pi))
+            ca, sa = np.cos(th) * s, np.sin(th) * s
+            c0 = CROP / 2.0
+            M = np.array([[ca, -sa, c0 - ca * cx + sa * cy],
+                          [sa, ca, c0 - sa * cx - ca * cy]], np.float32)
+            aff = [ca, -sa, sa, ca, float(M[0, 2]), float(M[1, 2])]   # shapely: a, b, d, e, xoff, yoff
+        else:
+            src = CROP / s
+            x0, y0 = cx - src / 2, cy - src / 2
+            x0 = float(np.clip(x0, min(0, w - src), max(0, w - src)))   # keep the crop inside the chip when it fits
+            y0 = float(np.clip(y0, min(0, h - src), max(0, h - src)))
+            M = np.array([[s, 0, -x0 * s], [0, s, -y0 * s]], np.float32)
+            aff = [s, 0, 0, s, -x0 * s, -y0 * s]
         out = cv2.warpAffine(np.ascontiguousarray(im), M, (CROP, CROP), flags=cv2.INTER_LINEAR, borderValue=0)
         val = (out.sum(2) > 0).astype(np.float32)
         from shapely.affinity import affine_transform
-        objs = [(cl, affine_transform(g, [s, 0, 0, s, -x0 * s, -y0 * s])) for cl, g in c["objs"]]
+        objs = [(cl, affine_transform(g, aff)) for cl, g in c["objs"]]
         hmap, mk = hm.draw_targets((CROP, CROP), objs, len(CLS))
         t_hm = np.stack([np.maximum(hmap[0], hmap[1]), hmap[2], hmap[3], hmap[4]])
         img = out.astype(np.float32).transpose(2, 0, 1)
@@ -313,9 +330,10 @@ if __name__ == "__main__":
     ap.add_argument("--oof", action="store_true")
     ap.add_argument("--tag", default="")
     ap.add_argument("--bs", type=int, default=8)
+    ap.add_argument("--lr", type=float, default=3e-4)   # 3e-4 is tuned for bs 8; scale it down when the batch shrinks
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
     if a.fold is not None:
-        train(a.mod, a.fold, a.iters, bs=a.bs, tag=a.tag, seed=a.seed)
+        train(a.mod, a.fold, a.iters, bs=a.bs, lr=a.lr, tag=a.tag, seed=a.seed)
     if a.oof:
         oof(a.mod, a.tag)

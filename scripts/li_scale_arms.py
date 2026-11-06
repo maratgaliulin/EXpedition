@@ -34,6 +34,7 @@ def parse(arm):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fold", type=int, default=0)
+    ap.add_argument("--folds", default="")       # e.g. 0,1,2,3 — pooled over every held-out fold at once
     ap.add_argument("--arms", nargs="+", required=True)
     ap.add_argument("--thrs", default="")        # e.g. 0.1,0.15,0.2,0.3 — otherwise the deployed 0.15 only
     ap.add_argument("--duals", default="")
@@ -41,7 +42,8 @@ def main():
     thrs = [float(t) for t in a.thrs.split(",")] if a.thrs else [CFG["thr"]]
     duals = [float(d) for d in a.duals.split(",")] if a.duals else [CFG["dual"]]
     L = li_train.labels()
-    items = [it for it in li_train.site_items(L) if it["fold"] == a.fold and it["objs"]]
+    folds = [int(f) for f in a.folds.split(",")] if a.folds else [a.fold]
+    items = [it for it in li_train.site_items(L) if it["fold"] in folds and it["objs"]]
     gt = to_gt_geojson(L[L.region.isin([it["region"] for it in items])])
     gts = {}
     for f in gt["features"]:
@@ -85,6 +87,16 @@ def main():
                     print(f"   {c:24s} F1 {2 * tp / max(2 * tp + fn + 0.5 * fp, 1):.3f} tp {tp} fp {fp} fn {fn}")
     json.dump({n: {k: v for k, v in c.items()} for n, c in res.items()},
               open(os.path.join(li_train.RUNS, "scale_arms_counts.json"), "w"), default=str)
+
+    if len(folds) > 1:                       # per-fold pooled: the promotion decision is "positive in how many folds"
+        fold_of = {it["region"]: it["fold"] for it in items}
+        print("\nper-fold pooled:")
+        for name, cnt in res.items():
+            row = []
+            for f in sorted(folds):
+                cell = cnt[next(k for k in cnt if k.endswith(f"@t{thrs[0]:g}d{duals[0]:g}"))]
+                row.append(f"f{f} {weighted(_add_all(v for r, v in cell.items() if fold_of[r] == f)):.4f}")
+            print(f"   {name:8s} " + "  ".join(row))
 
 
 if __name__ == "__main__":
